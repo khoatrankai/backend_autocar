@@ -18,6 +18,7 @@ import { ReturnsModule } from './modules/returns/returns.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { CategoriesModule } from './modules/categories/categories.module';
 import { ImportsModule } from './modules/imports/imports.module';
+import { InventoryModule } from './modules/inventory/inventory.module';
 // Sau này bạn sẽ import thêm AuthModule, ProductsModule vào đây
 
 @Module({
@@ -40,6 +41,7 @@ import { ImportsModule } from './modules/imports/imports.module';
     TransactionsModule,
     ReturnsModule,
     ReportsModule,
+    InventoryModule,
   ],
   controllers: [AppController, UploadController],
   providers: [AppService, SupabaseService],

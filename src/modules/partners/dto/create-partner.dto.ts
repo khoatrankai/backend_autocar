@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, PickType } from '@nestjs/swagger';
 import {
   IsString,
   IsOptional,
@@ -7,9 +7,10 @@ import {
   IsNumber,
   IsUUID,
   Min,
+  IsNotEmpty,
 } from 'class-validator';
 
-// Định nghĩa Enum
+// --- ENUMS ---
 export enum PartnerType {
   CUSTOMER = 'customer',
   SUPPLIER = 'supplier',
@@ -20,106 +21,98 @@ export enum PartnerStatus {
   LOCKED = 'locked',
 }
 
+// --- STANDARD CREATE DTO ---
 export class CreatePartnerDto {
-  @ApiProperty({
-    example: 'KH001',
-    description: 'Mã đối tác (Duy nhất). VD: KH001, NCC002',
-  })
+  @ApiProperty({ example: 'KH001', description: 'Mã đối tác (Duy nhất)' })
   @IsString()
+  @IsNotEmpty()
   code: string;
 
-  @ApiProperty({
-    example: 'Gara Ô tô Tuấn Phát',
-    description: 'Tên đầy đủ của khách hàng hoặc nhà cung cấp',
-  })
+  @ApiProperty({ example: 'Gara Ô tô Tuấn Phát' })
   @IsString()
+  @IsNotEmpty()
   name: string;
 
-  @ApiProperty({
-    example: '0912345678',
-    required: false,
-    description: 'Số điện thoại liên hệ',
-  })
+  @ApiProperty({ example: '0912345678', required: false })
   @IsOptional()
   @IsString()
   phone?: string;
 
-  @ApiProperty({
-    example: 'contact@gara-tuanphat.com',
-    required: false,
-    description: 'Địa chỉ Email',
-  })
+  @ApiProperty({ example: 'contact@gara-tuanphat.com', required: false })
   @IsOptional()
   @IsEmail()
   email?: string;
 
-  @ApiProperty({
-    example: '123 Phạm Văn Đồng, Hà Nội',
-    required: false,
-    description: 'Địa chỉ giao hàng/trụ sở',
-  })
+  @ApiProperty({ example: '123 Phạm Văn Đồng, Hà Nội', required: false })
   @IsOptional()
   @IsString()
   address?: string;
 
-  @ApiProperty({
-    enum: PartnerType,
-    default: PartnerType.CUSTOMER,
-    example: PartnerType.CUSTOMER,
-    required: false,
-    description:
-      'Loại đối tác: customer (Khách hàng) hoặc supplier (Nhà cung cấp)',
-  })
+  @ApiProperty({ enum: PartnerType, default: PartnerType.CUSTOMER })
   @IsOptional()
   @IsEnum(PartnerType)
   type?: PartnerType = PartnerType.CUSTOMER;
 
-  @ApiProperty({
-    example: 'Khách VIP',
-    required: false,
-    description: 'Nhóm khách hàng (Gara, Khách lẻ, Đại lý...)',
-  })
+  @ApiProperty({ example: 'Khách VIP', required: false })
   @IsOptional()
   @IsString()
   group_name?: string;
 
   @ApiProperty({
-    example: '123e4567-e89b-12d3-a456-426614174000',
+    example: 'uuid-string',
     required: false,
-    description: 'UUID của nhân viên sales phụ trách khách này',
+    description: 'Nhân viên phụ trách',
   })
   @IsOptional()
   @IsUUID()
   assigned_staff_id?: string;
 
-  @ApiProperty({
-    enum: PartnerStatus,
-    default: PartnerStatus.ACTIVE,
-    example: PartnerStatus.ACTIVE,
-    required: false,
-    description: 'Trạng thái hoạt động',
-  })
+  @ApiProperty({ enum: PartnerStatus, default: PartnerStatus.ACTIVE })
   @IsOptional()
   @IsEnum(PartnerStatus)
   status?: PartnerStatus = PartnerStatus.ACTIVE;
 
-  @ApiProperty({
-    example: 20000000,
-    required: false,
-    description: 'Hạn mức công nợ cho phép (VNĐ)',
-    minimum: 0,
-  })
+  @ApiProperty({ example: 20000000, required: false, minimum: 0 })
   @IsOptional()
   @IsNumber()
   @Min(0)
   debt_limit?: number;
 
-  @ApiProperty({
-    example: 'Khách khó tính, yêu cầu gọi trước khi giao',
-    required: false,
-    description: 'Ghi chú nội bộ',
-  })
+  @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
   notes?: string;
+}
+
+// --- 2. QUICK CREATE DTO ---
+// Chỉ lấy các trường cần thiết, các trường khác sẽ tự động xử lý ở Service
+export class QuickCreatePartnerDto extends PickType(CreatePartnerDto, [
+  'name',
+  'phone',
+  'address',
+] as const) {
+  // Ghi đè type nếu muốn mặc định là Customer trong Swagger, dù Service sẽ hardcode
+  @ApiProperty({ enum: PartnerType, default: PartnerType.CUSTOMER })
+  @IsOptional()
+  @IsEnum(PartnerType)
+  type?: PartnerType = PartnerType.CUSTOMER;
+}
+
+// --- 3. ASSIGN STAFF DTO ---
+export class AssignPartnerDto {
+  @ApiProperty({
+    description: 'UUID của nhân viên sales cần gán',
+    example: 'uuid-v4',
+  })
+  @IsUUID()
+  @IsNotEmpty()
+  staff_id: string;
+}
+
+// --- 4. UPDATE STATUS DTO ---
+export class UpdatePartnerStatusDto {
+  @ApiProperty({ enum: PartnerStatus, description: 'Trạng thái mới' })
+  @IsEnum(PartnerStatus)
+  @IsNotEmpty()
+  status: PartnerStatus;
 }
