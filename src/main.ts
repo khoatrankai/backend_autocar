@@ -8,7 +8,16 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   // 1. Validation (Kiểm tra dữ liệu đầu vào)
-  app.useGlobalPipes(new ValidationPipe({ whitelist: true }));
+  app.useGlobalPipes(
+    new ValidationPipe({
+      transform: true, // <--- QUAN TRỌNG: Tự động convert kiểu dữ liệu
+      whitelist: true, // Tự động bỏ các trường không có trong DTO
+      forbidNonWhitelisted: true, // Báo lỗi nếu gửi trường thừa
+      // transformOptions: {
+      //   enableImplicitConversion: true, // (Tùy chọn) Convert ngầm định không cần @Type
+      // },
+    }),
+  );
   (BigInt.prototype as any).toJSON = function () {
     const int = Number.parseInt(this.toString());
     // Nếu số nhỏ nằm trong giới hạn Javascript thì trả về Number, nếu quá lớn thì trả về String

@@ -10,6 +10,12 @@ import {
   UseGuards,
   ParseIntPipe,
   Req,
+  Res,
+  UseInterceptors,
+  UploadedFile,
+  ParseFilePipe,
+  MaxFileSizeValidator,
+  FileTypeValidator,
 } from '@nestjs/common';
 import { PartnersService } from './partners.service';
 import {
@@ -25,8 +31,11 @@ import {
   ApiOperation,
   ApiResponse,
   ApiBearerAuth,
+  ApiConsumes,
+  ApiBody,
 } from '@nestjs/swagger';
 import { SupabaseGuard } from 'src/auth/supabase.guard';
+import { FileInterceptor } from '@nestjs/platform-express';
 
 // Giả định bạn có AuthGuard và RolesGuard
 // import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
@@ -136,7 +145,7 @@ export class PartnersController {
   // -------------------------------------------------------
   // Xem chi tiết
   // -------------------------------------------------------
-  @Get(':id')
+  @Get('id/:id')
   @ApiOperation({ summary: 'Xem chi tiết đối tác' })
   findOne(@Param('id', ParseIntPipe) id: number) {
     return this.partnersService.findOne(id);
@@ -176,5 +185,68 @@ export class PartnersController {
     // const mockSale: UserPayload = { id: 'sale-id', role: 'sale' };
 
     return this.partnersService.remove(id, mockAdmin);
+  }
+
+  @Post('import')
+  @ApiOperation({ summary: 'Import đối tác từ file Excel (.xlsx)' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        file: {
+          type: 'string',
+          format: 'binary',
+        },
+      },
+    },
+  })
+  @UseInterceptors(FileInterceptor('file'))
+  importExcel(
+    @UploadedFile(
+      new ParseFilePipe({
+        validators: [
+          new MaxFileSizeValidator({ maxSize: 1024 * 1024 * 10 }), // Max 5MB
+          // Validate đúng đuôi file Excel
+          new FileTypeValidator({
+            fileType:
+              'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          }),
+        ],
+      }),
+    )
+    file: Express.Multer.File,
+    @Req() req: any,
+  ) {
+    return this.partnersService.importExcel(file, req.user);
+  }
+
+  // ==========================================
+  // 4. EXPORT EXCEL
+  // ==========================================
+  @Get('export')
+  @ApiBearerAuth() // <--- Hiện ổ khóa trên Swagger
+  @UseGuards(SupabaseGuard) // <--- Kích hoạt bảo vệ
+  @ApiOperation({ summary: 'Xuất danh sách ra Excel (Theo bộ lọc hiện tại)' })
+  async exportExcel(
+    @Query() filter: FilterPartnerDto,
+    @Req() req: any,
+    @Res() res: any,
+  ) {
+    // 1. Gọi service để lấy Buffer file
+    const buffer = await this.partnersService.exportExcel(filter, req.user);
+
+    // 2. Set Header để trình duyệt hiểu là file tải về
+    const fileName = `DanhSachDoiTac_${Date.now()}.xlsx`;
+
+    res.set({
+      'Content-Type':
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="${fileName}"`,
+      'Content-Length': buffer.byteLength,
+    });
+
+    // 3. Gửi buffer về client
+    res.send(buffer);
   }
 }

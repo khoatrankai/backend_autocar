@@ -12,6 +12,7 @@ import { UpdatePartnerDto } from './dto/update-partner.dto';
 import { FilterPartnerDto } from './dto/filter-partner.dto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from 'src/shared/prisma/prisma.service';
+import * as ExcelJS from 'exceljs';
 
 // Interface giả định cho User (lấy từ request)
 interface UserPayload {
@@ -76,61 +77,125 @@ export class PartnersService {
       throw error;
     }
   }
+  private sanitizePartner(partner: any, role: string) {
+    const p = {
+      ...partner,
+      id: partner.id.toString(), // Convert BigInt safe JSON
+    };
 
+    // Chỉ Admin và Kế toán được xem tiền nong
+    const allowedRoles = ['admin', 'accountant'];
+
+    if (!allowedRoles.includes(role)) {
+      // Ẩn các cột tài chính đối với Sale/Warehouse
+      delete p.total_revenue;
+      delete p.current_debt;
+      delete p.debt_limit;
+    }
+    return p;
+  }
   // 2. Lấy danh sách (Phân trang + Phân quyền)
   async findAll(filter: FilterPartnerDto, user: UserPayload) {
-    const { search, type, page = 1, limit = 10 } = filter;
+    const {
+      search,
+      type,
+      page = 1,
+      limit = 10,
+      fromDate,
+      toDate,
+      minRevenue,
+      maxRevenue,
+      minDebt,
+      maxDebt,
+    } = filter;
 
     const skip = (page - 1) * limit;
 
-    // --- LOGIC PHÂN QUYỀN (RLS tại tầng Application) ---
+    // 1. Phân quyền dữ liệu (Ai được xem khách hàng nào)
     let roleCondition: Prisma.partnersWhereInput = {};
-
     if (user.role === 'sale') {
-      // Sale chỉ thấy khách của mình HOẶC khách chưa ai phụ trách (khách chung)
       roleCondition = {
         OR: [{ assigned_staff_id: user.id }, { assigned_staff_id: null }],
       };
     }
-    // Admin/Kế toán: roleCondition rỗng -> Xem tất cả
 
-    // --- ĐIỀU KIỆN TÌM KIẾM ---
+    // 2. Lọc theo thời gian (Created At)
+    const dateCondition: Prisma.partnersWhereInput =
+      fromDate || toDate
+        ? {
+            created_at: {
+              gte: fromDate ? new Date(fromDate) : undefined,
+              lte: toDate ? new Date(toDate) : undefined,
+            },
+          }
+        : {};
+
+    // 3. Lọc theo doanh số & công nợ
+    const revenueCondition: Prisma.partnersWhereInput =
+      minRevenue || maxRevenue
+        ? {
+            total_revenue: {
+              gte: minRevenue || undefined,
+              lte: maxRevenue || undefined,
+            },
+          }
+        : {};
+
+    const debtCondition: Prisma.partnersWhereInput =
+      minDebt || maxDebt
+        ? {
+            current_debt: {
+              gte: minDebt || undefined,
+              lte: maxDebt || undefined,
+            },
+          }
+        : {};
+
+    // 4. Tìm kiếm từ khóa (Bỏ search tax_code)
     const searchCondition: Prisma.partnersWhereInput = search
       ? {
           OR: [
             { name: { contains: search, mode: 'insensitive' } },
             { phone: { contains: search, mode: 'insensitive' } },
             { code: { contains: search, mode: 'insensitive' } },
+            { email: { contains: search, mode: 'insensitive' } },
           ],
         }
       : {};
 
     const whereCondition: Prisma.partnersWhereInput = {
       AND: [
-        type ? { type } : {}, // Lọc theo loại (NCC/Khách hàng)
-        roleCondition, // Lọc theo quyền
-        searchCondition, // Lọc theo từ khóa
+        type ? { type } : {},
+        roleCondition,
+        searchCondition,
+        dateCondition,
+        revenueCondition,
+        debtCondition,
       ],
     };
 
-    // Thực hiện truy vấn (Transaction để lấy cả data và count)
+    // 5. Query Database
     const [partners, total] = await this.prisma.$transaction([
       this.prisma.partners.findMany({
         where: whereCondition,
         skip: Number(skip),
         take: Number(limit),
         include: {
-          profiles: {
-            select: { full_name: true, phone_number: true },
-          },
+          profiles: { select: { full_name: true, phone_number: true } },
         },
         orderBy: { created_at: 'desc' },
       }),
       this.prisma.partners.count({ where: whereCondition }),
     ]);
 
+    // 6. SANITIZE DATA (Xử lý ẩn hiện cột nhạy cảm theo Role)
+    // "Các mục này chỉ có account Ban lãnh đạo mới xem"
+    const safePartners = partners.map((p) =>
+      this.sanitizePartner(p, user.role),
+    );
+
     return {
-      data: partners,
+      data: safePartners,
       meta: {
         total,
         page: Number(page),
@@ -253,5 +318,151 @@ export class PartnersService {
         // code: `${partner.code}_DEL_${Date.now()}`
       },
     });
+  }
+
+  async importExcel(file: Express.Multer.File, user: UserPayload) {
+    // 1. Khởi tạo Workbook và đọc Buffer
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(file.buffer as any);
+
+    // 2. Lấy Sheet đầu tiên
+    const worksheet = workbook.getWorksheet(1); // ExcelJS index bắt đầu từ 1
+    if (!worksheet) {
+      throw new Error('File Excel không có dữ liệu (Sheet 1 rỗng)');
+    }
+
+    let successCount = 0;
+    const errors: string[] = [];
+
+    // 3. Duyệt từng dòng (Bỏ qua dòng 1 là Header)
+    // Cấu trúc file Excel mong đợi:
+    // Cột 1: Mã | Cột 2: Tên | Cột 3: SĐT | Cột 4: Email | Cột 5: Địa chỉ
+
+    // Sử dụng Promise.all để xử lý async trong vòng lặp (hoặc dùng for...of)
+    // Tuy nhiên eachRow là sync callback, nên ta sẽ gom data trước rồi save
+    const rowsToInsert: any[] = [];
+
+    worksheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return; // Bỏ qua header
+
+      // Lấy dữ liệu theo thứ tự cột (Index bắt đầu từ 1)
+      // row.getCell(1).text sẽ an toàn hơn .value (đề phòng rich text/formula)
+      const code = row.getCell(1).text;
+      const name = row.getCell(2).text;
+      const phone = row.getCell(3).text;
+      const email = row.getCell(4).text;
+      const address = row.getCell(5).text;
+
+      if (!name || !phone) {
+        errors.push(`Dòng ${rowNumber}: Thiếu Tên hoặc SĐT`);
+        return;
+      }
+
+      rowsToInsert.push({
+        index: rowNumber,
+        data: {
+          code: code || `KH_IMP_${Date.now()}_${rowNumber}`,
+          name: name,
+          phone: phone,
+          email: email,
+          address: address,
+          type: 'supplier',
+          assigned_staff_id: user.id,
+          status: 'active',
+          current_debt: 0,
+          total_revenue: 0,
+        },
+      });
+    });
+
+    // 4. Thực hiện Insert vào DB
+    for (const item of rowsToInsert) {
+      try {
+        await this.prisma.partners.create({
+          data: item.data,
+        });
+        successCount++;
+      } catch (err) {
+        errors.push(`Dòng ${item.index}: Lỗi lưu DB (${err.message})`);
+      }
+    }
+
+    return {
+      success: true,
+      message: `Đã import ${successCount} dòng. Lỗi ${errors.length}.`,
+      errors: errors.length ? errors : null,
+    };
+  }
+
+  // =================================================================
+  // YÊU CẦU 2: EXPORT EXCEL (DÙNG EXCELJS)
+  // =================================================================
+  async exportExcel(filter: FilterPartnerDto, user: UserPayload) {
+    // 1. Lấy dữ liệu (Đã qua bộ lọc)
+    // Lưu ý: data trả về đã được chạy qua hàm sanitizePartner ở trong findAll
+    const { data } = await this.findAll(
+      { ...filter, page: 1, limit: 100000 },
+      user,
+    );
+
+    // 2. Tạo Workbook & Worksheet
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Danh sách đối tác');
+
+    // 3. Định nghĩa Cột (Columns)
+    // key: phải khớp với key trong object data bạn map phía dưới
+    const columns = [
+      { header: 'Mã ĐT', key: 'code', width: 15 },
+      { header: 'Tên đối tác', key: 'name', width: 30 },
+      { header: 'Số điện thoại', key: 'phone', width: 15 },
+      { header: 'Email', key: 'email', width: 25 },
+      { header: 'Địa chỉ', key: 'address', width: 40 },
+      { header: 'Nhóm', key: 'group_name', width: 15 },
+      { header: 'NV Phụ trách', key: 'staff_name', width: 20 },
+      { header: 'Ngày tạo', key: 'created_at', width: 15 },
+    ];
+
+    // Chỉ thêm cột tài chính nếu User có quyền (Admin/Kế toán)
+    // Check bằng cách xem data dòng đầu tiên có trường đó không
+    const hasFinancialData = data.length > 0 && 'total_revenue' in data[0];
+
+    if (hasFinancialData) {
+      columns.push(
+        { header: 'Tổng mua', key: 'total_revenue', width: 20 },
+        { header: 'Nợ hiện tại', key: 'current_debt', width: 20 },
+      );
+    }
+
+    worksheet.columns = columns;
+
+    // 4. Map dữ liệu & Thêm dòng
+    const exportData = data.map((p: any) => ({
+      code: p.code,
+      name: p.name,
+      phone: p.phone,
+      email: p.email,
+      address: p.address,
+      group_name: p.group_name,
+      staff_name: p.profiles?.full_name || '',
+      created_at: p.created_at
+        ? new Date(p.created_at).toLocaleDateString()
+        : '',
+      // Các trường này có thể undefined nếu bị sanitize
+      total_revenue: p.total_revenue ? Number(p.total_revenue) : undefined,
+      current_debt: p.current_debt ? Number(p.current_debt) : undefined,
+    }));
+
+    worksheet.addRows(exportData);
+
+    // 5. Format Header (Tùy chọn: Làm đậm hàng đầu)
+    worksheet.getRow(1).font = { bold: true };
+    worksheet.getRow(1).alignment = {
+      vertical: 'middle',
+      horizontal: 'center',
+    };
+
+    // 6. Trả về Buffer
+    // writeBuffer trả về Promise<Buffer>, controller sẽ stream cái này về client
+    return await workbook.xlsx.writeBuffer();
   }
 }
