@@ -31,8 +31,8 @@ export class CreateReturnDto {
   code: string;
 
   @ApiProperty({ example: 500, description: 'ID Đơn hàng gốc' })
-  @IsNumber()
-  order_id: number;
+  @IsOptional()
+  order_id?: number | string;
 
   @ApiProperty({ example: 5, description: 'ID Khách hàng' })
   @IsNumber()

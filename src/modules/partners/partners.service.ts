@@ -13,6 +13,7 @@ import { FilterPartnerDto } from './dto/filter-partner.dto';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from 'src/shared/prisma/prisma.service';
 import * as ExcelJS from 'exceljs';
+import { FilterSupplierDto } from './dto/filter-supplier.dto';
 
 // Interface giả định cho User (lấy từ request)
 interface UserPayload {
@@ -464,5 +465,127 @@ export class PartnersService {
     // 6. Trả về Buffer
     // writeBuffer trả về Promise<Buffer>, controller sẽ stream cái này về client
     return await workbook.xlsx.writeBuffer();
+  }
+
+  async getPartnerGroups() {
+    // Lấy các group_name duy nhất, chỉ của 'supplier' (hoặc 'partner')
+    const groups = await this.prisma.partners.findMany({
+      where: {
+        // Lưu ý: Kiểm tra DB xem bạn lưu là 'supplier' hay 'partner'
+        // type: { in: ['supplier', 'partner'] },
+        type: 'supplier', // Giả sử DB lưu là supplier
+        group_name: { not: null }, // Bỏ qua null
+      },
+      distinct: ['group_name'], // Chỉ lấy duy nhất
+      select: {
+        group_name: true,
+      },
+      orderBy: {
+        group_name: 'asc',
+      },
+    });
+
+    // Trả về mảng string đơn giản: ['Lốp xe', 'Phụ tùng', ...]
+    return groups.map((g) => g.group_name).filter(Boolean);
+  }
+
+  async findAllSupplier(query: FilterSupplierDto) {
+    const {
+      page = 1,
+      limit = 10,
+      search,
+      groupNames,
+      minDebt,
+      maxDebt,
+      minRevenue,
+      maxRevenue,
+      dateFrom,
+      dateTo,
+      status,
+    } = query;
+
+    const skip = (page - 1) * limit;
+
+    // --- KHỞI TẠO ĐIỀU KIỆN WHERE ---
+    const where: Prisma.partnersWhereInput = {
+      type: 'supplier', // Cố định chỉ lấy Nhà cung cấp
+      AND: [],
+    };
+    const andCond = where.AND as Prisma.partnersWhereInput[];
+
+    // 1. Tìm kiếm (Tên, Mã, SĐT)
+    if (search) {
+      andCond.push({
+        OR: [
+          { name: { contains: search, mode: 'insensitive' } },
+          { code: { contains: search, mode: 'insensitive' } },
+          { phone: { contains: search, mode: 'insensitive' } },
+        ],
+      });
+    }
+
+    // 2. Lọc theo Nhóm (group_name)
+    if (groupNames && groupNames.length > 0) {
+      andCond.push({
+        group_name: { in: groupNames, mode: 'insensitive' },
+      });
+    }
+
+    // 3. Lọc Nợ hiện tại (current_debt)
+    if (minDebt !== undefined || maxDebt !== undefined) {
+      const debtFilter: Prisma.DecimalFilter = {};
+      if (minDebt !== undefined) debtFilter.gte = minDebt;
+      if (maxDebt !== undefined) debtFilter.lte = maxDebt;
+      andCond.push({ current_debt: debtFilter });
+    }
+
+    // 4. Lọc Tổng mua (total_revenue)
+    if (minRevenue !== undefined || maxRevenue !== undefined) {
+      const revenueFilter: Prisma.DecimalFilter = {};
+      if (minRevenue !== undefined) revenueFilter.gte = minRevenue;
+      if (maxRevenue !== undefined) revenueFilter.lte = maxRevenue;
+      andCond.push({ total_revenue: revenueFilter });
+    }
+
+    // 5. Lọc Thời gian tạo (created_at)
+    if (dateFrom || dateTo) {
+      const dateFilter: Prisma.DateTimeFilter = {};
+      if (dateFrom) dateFilter.gte = new Date(dateFrom);
+      if (dateTo) dateFilter.lte = new Date(dateTo);
+      andCond.push({ created_at: dateFilter });
+    }
+
+    // 6. Trạng thái
+    if (status && status !== 'all') {
+      andCond.push({ status });
+    }
+
+    // --- THỰC THI QUERY ---
+    const [data, total] = await Promise.all([
+      this.prisma.partners.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { created_at: 'desc' },
+      }),
+      this.prisma.partners.count({ where }),
+    ]);
+
+    // --- TRẢ VỀ KẾT QUẢ ---
+    return {
+      data: data.map((item) => ({
+        ...item,
+        // Convert Decimal sang Number để Frontend dễ dùng
+        id: item.id.toString(),
+        current_debt: Number(item.current_debt),
+        total_revenue: Number(item.total_revenue),
+      })),
+      meta: {
+        total,
+        page,
+        limit,
+        total_pages: Math.ceil(total / limit),
+      },
+    };
   }
 }

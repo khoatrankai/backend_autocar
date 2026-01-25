@@ -8,10 +8,14 @@ import {
   Query,
   UseGuards,
   ParseIntPipe,
+  Delete,
 } from '@nestjs/common';
 import { ProductsService } from './products.service';
 import { CreateProductDto } from './dto/create-product.dto';
-import { FilterProductDto } from './dto/filter-product.dto';
+import {
+  FilterAdvanceProductDto,
+  FilterProductDto,
+} from './dto/filter-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 
@@ -20,11 +24,12 @@ import { RolesGuard } from 'src/auth/guards/roles.guard';
 import { Roles } from 'src/auth/decorators/roles.decorator';
 import { UserRole } from 'src/auth/dto/auth.dto';
 import { SupabaseGuard } from 'src/auth/supabase.guard';
+import { DeleteManyDto } from './dto/delete-many.dto';
 
 @ApiTags('Products')
 @Controller('products')
-@UseGuards(SupabaseGuard, RolesGuard) // Bảo vệ toàn bộ Controller
-@ApiBearerAuth()
+// @UseGuards(SupabaseGuard, RolesGuard) // Bảo vệ toàn bộ Controller
+// @ApiBearerAuth()
 export class ProductsController {
   constructor(private readonly service: ProductsService) {}
 
@@ -36,11 +41,34 @@ export class ProductsController {
     return this.service.create(dto);
   }
 
+  @Get('stock-card/:id')
+  getStockCard(@Param('id') id: string) {
+    return this.service.getStockCard(id);
+  }
+
+  @Get('inventory-detail/:id')
+  getInventoryDetail(@Param('id') id: string) {
+    return this.service.getInventoryDetail(id);
+  }
+
+  @Get('brands')
+  @ApiOperation({ summary: 'Lấy danh sách tất cả thương hiệu' })
+  getBrands() {
+    return this.service.getBrands();
+  }
   // 2. Lấy danh sách (Ai cũng xem được, miễn là đã login)
   @Get()
   @ApiOperation({ summary: 'Lấy danh sách sản phẩm (Phân trang & Tìm kiếm)' })
   findAll(@Query() query: FilterProductDto) {
     return this.service.findAll(query);
+  }
+
+  @Get('advance')
+  @ApiOperation({
+    summary: 'Lấy danh sách sản phẩm nâng cao (Phân trang & Tìm kiếm)',
+  })
+  findAllAdvance(@Query() query: FilterAdvanceProductDto) {
+    return this.service.findAllAdvance(query);
   }
 
   // 3. Xem chi tiết
@@ -56,5 +84,12 @@ export class ProductsController {
   @ApiOperation({ summary: 'Cập nhật thông tin sản phẩm' })
   update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateProductDto) {
     return this.service.update(id, dto);
+  }
+
+  @Delete('multiple')
+  @Roles(UserRole.ADMIN, UserRole.WAREHOUSE) // Chỉ Admin/Kho được xóa
+  @ApiOperation({ summary: 'Xóa nhiều sản phẩm cùng lúc' })
+  removeMultiple(@Body() dto: DeleteManyDto) {
+    return this.service.removeMultiple(dto.ids);
   }
 }

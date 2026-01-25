@@ -20,7 +20,11 @@ export class SupabaseGuard implements CanActivate {
 
     // --- THÊM LOG DEBUG TẠI ĐÂY ---
     const authHeader = request.headers.authorization;
-
+    console.log('------------------------------------------------');
+    console.log(
+      '🔍 [GUARD] 1. Auth Header nhận được:',
+      authHeader ? `${authHeader.substring(0, 20)}...` : 'KHÔNG CÓ',
+    );
     const token = this.extractTokenFromHeader(request);
     // -----------------------------
 

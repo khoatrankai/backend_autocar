@@ -179,4 +179,70 @@ export class OrdersService {
       orderBy: { created_at: 'desc' },
     });
   }
+
+  async getProductStockCard(productId: string) {
+    // 1. Lấy tồn kho hiện tại (Tổng tất cả các kho của sản phẩm này)
+    const productInventory = await this.prisma.inventory.aggregate({
+      where: { product_id: BigInt(productId) },
+      _sum: { quantity: true },
+    });
+
+    // Tồn kho thực tế hiện tại (Ví dụ: 47)
+    let currentTotalStock = productInventory._sum.quantity || 0;
+
+    // 2. Lấy lịch sử bán hàng (Chỉ lấy đơn completed), sắp xếp MỚI NHẤT lên đầu
+    const salesHistory = await this.prisma.order_items.findMany({
+      where: {
+        product_id: BigInt(productId),
+        orders: {
+          status: 'completed', // Chỉ tính đơn đã hoàn thành/trừ kho
+        },
+      },
+      include: {
+        orders: {
+          include: {
+            partners: { select: { name: true } }, // Lấy tên đối tác
+          },
+        },
+        products: {
+          select: { cost_price: true }, // Lấy giá vốn hiện tại (từ bảng products)
+        },
+      },
+      orderBy: {
+        created_at: 'desc', // Quan trọng: Mới nhất trước
+      },
+    });
+
+    // 3. Thuật toán tính ngược Tồn cuối (Back-calculation)
+    // Biến chạy để lưu tồn kho tại thời điểm đang xét
+    let runningStock = currentTotalStock;
+
+    const result = salesHistory.map((item) => {
+      const quantitySold = Number(item.quantity); // VD: 4
+
+      // Tại dòng này (thời điểm này), tồn kho chính là runningStock hiện tại
+      const stockAfterThisSale = runningStock;
+
+      // Chuẩn bị cho dòng tiếp theo (dòng cũ hơn trong quá khứ)
+      // Trước khi bán đơn này, kho phải có nhiều hơn: Tồn + SL bán
+      runningStock = runningStock + quantitySold;
+
+      return {
+        id: item.id.toString(),
+        chung_tu: item.orders?.code, // Mã chứng từ (HD...)
+        thoi_gian: item.orders?.created_at, // Thời gian
+        doi_tac: item.orders?.partners?.name, // Tên khách hàng
+        gia_gd: Number(item.price), // Giá bán
+
+        // Lưu ý: Đây là giá vốn hiện tại của SP.
+        // Để chính xác lịch sử, bảng order_items nên có cột cost_price riêng.
+        gia_von: Number(item.products?.cost_price || 0),
+
+        so_luong: -quantitySold, // Hiển thị số âm vì là xuất kho
+        ton_cuoi: stockAfterThisSale, // [QUAN TRỌNG] Tồn cuối tính toán được
+      };
+    });
+
+    return result;
+  }
 }

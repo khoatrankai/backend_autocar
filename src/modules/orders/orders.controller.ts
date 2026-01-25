@@ -5,6 +5,7 @@ import {
   Body,
   UseGuards,
   Req,
+  Param,
   // Req, // Dùng cái này nếu có Auth thật
 } from '@nestjs/common';
 import { OrdersService } from './orders.service';
@@ -31,6 +32,12 @@ export class OrdersController {
   // -------------------------------------------------------
   // 1. Tạo đơn hàng (Logic phức tạp: Check nợ, Check kho, Transaction)
   // -------------------------------------------------------
+
+  @Get('stock-card/:productId')
+  async getStockCard(@Param('productId') productId: string) {
+    return this.ordersService.getProductStockCard(productId);
+  }
+
   @Post()
   @ApiBearerAuth() // <--- Hiện ổ khóa trên Swagger
   @UseGuards(SupabaseGuard) // <--- Kích hoạt bảo vệ

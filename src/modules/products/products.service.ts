@@ -1,8 +1,14 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from 'src/shared/prisma/prisma.service'; // Check đường dẫn
 import { CreateProductDto } from './dto/create-product.dto';
-import { FilterProductDto } from './dto/filter-product.dto';
+import {
+  DateRangeType,
+  FilterAdvanceProductDto,
+  FilterProductDto,
+  StockStatus,
+} from './dto/filter-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
+import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class ProductsService {
@@ -222,18 +228,264 @@ export class ProductsService {
     };
   }
 
+  async findAllAdvance(query: FilterAdvanceProductDto) {
+    const {
+      page = 1,
+      limit = 10,
+      search,
+      categoryIds,
+      supplierIds,
+      brandIds,
+      locationIds,
+      stockStatus,
+
+      // Các biến mới
+      createdDateType,
+      createdFrom, // thay vì createdDateRange
+      createdTo,
+
+      stockoutDateType,
+      stockoutFrom, // thay vì stockoutDateRange
+      stockoutTo,
+    } = query;
+
+    const skip = (page - 1) * limit;
+
+    // --- 1. KHỞI TẠO ĐIỀU KIỆN LỌC (WHERE) ---
+    // Sử dụng 'Prisma.productsWhereInput' để đảm bảo type-safe
+    const where: Prisma.productsWhereInput = {
+      AND: [],
+    };
+
+    // Ép kiểu để Typescript hiểu mảng này chứa các điều kiện con
+    const andConditions = where.AND as Prisma.productsWhereInput[];
+
+    // --- 2. XỬ LÝ TỪNG ĐIỀU KIỆN ---
+
+    // 2.1. Tìm kiếm (Search Text)
+    if (search) {
+      andConditions.push({
+        OR: [
+          { name: { contains: search, mode: 'insensitive' } },
+          { sku: { contains: search, mode: 'insensitive' } },
+          // { oem_code: { contains: search, mode: 'insensitive' } },
+        ],
+      });
+    }
+
+    // 2.2. Nhóm hàng (Multi-Select IDs - BigInt)
+    if (categoryIds && categoryIds.length > 0) {
+      andConditions.push({
+        category_id: { in: categoryIds.map((id) => BigInt(id)) },
+      });
+    }
+
+    // 2.3. Nhà cung cấp (Multi-Select IDs - BigInt)
+    if (supplierIds && supplierIds.length > 0) {
+      andConditions.push({
+        supplier_id: { in: supplierIds.map((id) => BigInt(id)) },
+      });
+    }
+
+    // 2.4. Thương hiệu (String)
+    // Lọc cả trong bảng Products lẫn bảng ProductCompatibility (xe tương thích)
+    if (brandIds && brandIds.length > 0) {
+      andConditions.push({
+        OR: [
+          { brand: { in: brandIds, mode: 'insensitive' } },
+          {
+            product_compatibility: {
+              some: {
+                car_make: { in: brandIds, mode: 'insensitive' },
+              },
+            },
+          },
+        ],
+      });
+    }
+
+    // 2.5. Vị trí kho & Trạng thái tồn kho (Relation Filter)
+    if (
+      stockStatus !== StockStatus.ALL ||
+      (locationIds && locationIds.length > 0)
+    ) {
+      const inventoryWhere: Prisma.InventoryListRelationFilter = {};
+
+      // A. Lọc theo Vị trí (Location Code)
+      if (locationIds && locationIds.length > 0) {
+        // Dùng Object.assign để merge điều kiện nếu 'some' đã tồn tại
+        inventoryWhere.some = Object.assign(inventoryWhere.some || {}, {
+          location_code: { in: locationIds },
+        });
+      }
+
+      // B. Lọc theo Trạng thái tồn (Stock Status)
+      if (stockStatus === StockStatus.IN_STOCK) {
+        // Có tồn kho: Có ít nhất 1 bản ghi inventory > 0
+        inventoryWhere.some = Object.assign(inventoryWhere.some || {}, {
+          quantity: { gt: 0 },
+        });
+      } else if (stockStatus === StockStatus.OUT_OF_STOCK) {
+        // Hết hàng: Không có bản ghi inventory nào > 0
+        // (Lưu ý: Logic này tương đương với việc tất cả các kho đều <= 0 hoặc chưa có record inventory)
+        inventoryWhere.none = { quantity: { gt: 0 } };
+
+        // *Edge Case:* Nếu vừa chọn Vị trí cụ thể, vừa chọn Hết hàng
+        // Nghĩa là: Tại vị trí X, sản phẩm này số lượng <= 0
+        if (locationIds && locationIds.length > 0) {
+          delete inventoryWhere.none; // Xóa điều kiện none ở trên
+          inventoryWhere.some = {
+            location_code: { in: locationIds },
+            quantity: { lte: 0 },
+          };
+        }
+      } else if (stockStatus === StockStatus.LOW_STOCK) {
+        // Dưới định mức (Tạm tính là <= 5)
+        inventoryWhere.some = Object.assign(inventoryWhere.some || {}, {
+          quantity: { lte: 5, gt: 0 },
+        });
+      }
+
+      // Chỉ push vào AND nếu có điều kiện inventory
+      if (Object.keys(inventoryWhere).length > 0) {
+        andConditions.push({ inventory: inventoryWhere });
+      }
+    }
+
+    // 2.6. Ngày tạo (Created At)
+    if (
+      createdDateType === DateRangeType.CUSTOM &&
+      (createdFrom || createdTo)
+    ) {
+      const dateFilter: Prisma.DateTimeFilter = {};
+      if (createdFrom) dateFilter.gte = new Date(createdFrom);
+      if (createdTo) dateFilter.lte = new Date(createdTo);
+
+      if (Object.keys(dateFilter).length > 0) {
+        andConditions.push({ created_at: dateFilter });
+      }
+    }
+
+    // --- SỬA LOGIC DỰ KIẾN HẾT HÀNG ---
+    if (
+      stockoutDateType === DateRangeType.CUSTOM &&
+      (stockoutFrom || stockoutTo)
+    ) {
+      const today = new Date();
+      const numberFilter: Prisma.DecimalFilter = {};
+
+      if (stockoutFrom) {
+        const diffDays = this.calculateDiffDays(today, new Date(stockoutFrom));
+        numberFilter.gte = diffDays;
+      }
+
+      if (stockoutTo) {
+        const diffDays = this.calculateDiffDays(today, new Date(stockoutTo));
+        numberFilter.lte = diffDays;
+      }
+
+      if (Object.keys(numberFilter).length > 0) {
+        andConditions.push({ estimated_stockout_days: numberFilter });
+      }
+    }
+
+    // --- 3. THỰC THI QUERY ---
+    const [data, total] = await Promise.all([
+      this.prisma.products.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { created_at: 'desc' },
+        include: {
+          categories: { select: { name: true } },
+          supplier: { select: { name: true } }, // Relation: ProductSupplier
+          inventory: {
+            select: {
+              quantity: true,
+              location_code: true,
+              warehouses: { select: { name: true } },
+            },
+          },
+          product_compatibility: {
+            select: {
+              car_make: true,
+              car_model: true,
+            },
+          },
+        },
+      }),
+      this.prisma.products.count({ where }),
+    ]);
+
+    // --- 4. FORMAT DỮ LIỆU TRẢ VỀ ---
+    const formattedData = data.map((item) => ({
+      ...item,
+      // Convert BigInt & Decimal sang String/Number để tránh lỗi JSON
+      id: item.id.toString(),
+      category_id: item.category_id?.toString(),
+      supplier_id: item.supplier_id?.toString(),
+      cost_price: Number(item.cost_price),
+      retail_price: Number(item.retail_price),
+      average_daily_sales: Number(item.average_daily_sales),
+      estimated_stockout_days: Number(item.estimated_stockout_days),
+
+      // Flatten Data cho Frontend dễ hiển thị
+      category_name: item.categories?.name,
+      supplier_name: item.supplier?.name,
+
+      // Tính tổng tồn kho
+      total_quantity: item.inventory.reduce(
+        (sum, inv) => sum + (inv.quantity || 0),
+        0,
+      ),
+
+      // Danh sách vị trí (Unique)
+      locations: [
+        ...new Set(item.inventory.map((i) => i.location_code).filter(Boolean)),
+      ].join(', '),
+
+      // Danh sách xe tương thích
+      compatibility: item.product_compatibility
+        .map((c) => `${c.car_make} ${c.car_model}`)
+        .join(', '),
+    }));
+
+    return {
+      data: formattedData,
+      meta: {
+        total,
+        page,
+        limit,
+        total_pages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  // --- HELPER FUNCTIONS ---
+
+  // Hàm tính khoảng cách ngày (trả về số ngày)
+
+  // Helper tính số ngày
+  private calculateDiffDays(d1: Date, d2: Date): number {
+    const diffTime = d2.getTime() - d1.getTime();
+    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  }
+
   // 3. CHI TIẾT SẢN PHẨM
   async findOne(id: number) {
     const product = await this.prisma.products.findUnique({
       where: { id: BigInt(id) },
       include: {
         categories: true,
-        product_compatibility: true, // Lấy danh sách xe
-        inventory: { include: { warehouses: true } }, // Lấy tồn kho chi tiết từng kho
+        product_compatibility: true,
+        inventory: { include: { warehouses: true } },
+        supplier: true, // <--- THÊM DÒNG NÀY (Lấy thông tin nhà cung cấp)
       },
     });
 
     if (!product) throw new BadRequestException('Sản phẩm không tồn tại');
+
+    // Convert BigInt sang string/number để frontend dễ dùng nếu cần (hoặc dùng interceptor)
     return product;
   }
 
@@ -306,5 +558,147 @@ export class ProductsService {
 
       return product;
     });
+  }
+
+  async updateSalesMetrics() {
+    return this.prisma.$executeRaw`SELECT calculate_sales_metrics();`;
+  }
+
+  async getBrands() {
+    // 1. Lấy tất cả các brand distinct (không trùng) từ bảng products
+    const brands = await this.prisma.products.findMany({
+      select: { brand: true },
+      distinct: ['brand'], // Chỉ lấy các giá trị duy nhất
+      where: {
+        brand: { not: null }, // Bỏ qua các sản phẩm không có brand
+      },
+      orderBy: { brand: 'asc' }, // Sắp xếp A-Z
+    });
+
+    // 2. Format lại dữ liệu trả về (Mảng string đơn giản)
+    // Kết quả gốc: [{ brand: "Samsung" }, { brand: "Apple" }]
+    // Kết quả mong muốn: ["Samsung", "Apple"]
+    const distinctBrands = brands
+      .map((item) => item.brand)
+      .filter((b) => b !== ''); // Lọc bỏ chuỗi rỗng nếu có
+
+    return {
+      statusCode: 200,
+      message: 'Lấy danh sách thương hiệu thành công',
+      data: distinctBrands,
+    };
+  }
+
+  async removeMultiple(ids: number[]) {
+    // Chuyển đổi ID nếu cần (vì DB là BigInt, DTO nhận vào là number/string)
+    // Nếu DB dùng BigInt, bạn cần map sang BigInt
+    const bigIntIds = ids.map((id) => BigInt(id));
+
+    const result = await this.prisma.products.deleteMany({
+      where: {
+        id: { in: bigIntIds },
+      },
+    });
+
+    return {
+      statusCode: 200,
+      message: `Đã xóa thành công ${result.count} sản phẩm`,
+    };
+  }
+
+  async getStockCard(productId: string) {
+    const logs = await this.prisma.inventory_logs.findMany({
+      where: {
+        product_id: BigInt(productId),
+      },
+      include: {
+        warehouses: { select: { name: true } }, // Lấy tên kho
+      },
+      orderBy: {
+        created_at: 'desc', // Mới nhất lên đầu
+      },
+    });
+
+    // Map dữ liệu cho Frontend dễ dùng
+    return logs.map((log) => ({
+      id: log.id.toString(),
+      thoi_gian: log.created_at,
+      loai_gd: log.type, // 'purchase', 'sale', 'return'...
+      chung_tu: log.reference_code,
+      kho: log.warehouses?.name,
+      so_luong: log.change_amount, // Số dương hoặc âm có sẵn trong DB
+      ton_cuoi: log.balance_after, // DB đã tính sẵn, chỉ việc hiện
+      dien_giai: log.note,
+    }));
+  }
+
+  async getInventoryDetail(productId: string) {
+    const id = BigInt(productId);
+
+    // 1. Lấy thông tin sản phẩm (để lấy tốc độ bán trung bình)
+    const product = await this.prisma.products.findUnique({
+      where: { id },
+      select: { average_daily_sales: true },
+    });
+
+    // 2. Lấy danh sách tất cả kho hàng
+    const warehouses = await this.prisma.warehouses.findMany({
+      select: { id: true, name: true },
+    });
+
+    // 3. Tính toán số liệu cho từng kho
+    const result = await Promise.all(
+      warehouses.map(async (warehouse) => {
+        // A. Lấy Tồn kho hiện tại (Bảng inventory)
+        const inventory = await this.prisma.inventory.findUnique({
+          where: {
+            product_id_warehouse_id: {
+              product_id: id,
+              warehouse_id: warehouse.id,
+            },
+          },
+        });
+        const currentStock = inventory?.quantity || 0;
+
+        // B. Tính "KH Đặt" (Hàng đang trong đơn pending/processing)
+        // Lưu ý: Logic này giả định bạn có status khác 'completed'.
+        // Nếu đơn tạo xong là trừ kho luôn và status='completed', thì KH Đặt = 0.
+        const onOrderAgg = await this.prisma.order_items.aggregate({
+          _sum: { quantity: true },
+          where: {
+            product_id: id,
+            orders: {
+              warehouse_id: warehouse.id,
+              // Chỉ tính các đơn chưa hoàn thành/đang giao
+              status: { in: ['pending', 'processing'] },
+            },
+          },
+        });
+        const onOrder = Number(onOrderAgg._sum.quantity || 0);
+
+        // C. Tính "Dự kiến hết hàng"
+        // Công thức: Tồn kho / Tốc độ bán (average_daily_sales)
+        const avgSales = Number(product?.average_daily_sales || 0);
+        let forecastDays = 0;
+        if (avgSales > 0 && currentStock > 0) {
+          forecastDays = Math.floor(currentStock / avgSales);
+        }
+
+        // D. Xác định Trạng thái
+        let status = 'Ngừng kinh doanh';
+        if (currentStock > 0) status = 'Đang kinh doanh';
+        else if (onOrder > 0) status = 'Đang nhập hàng'; // Ví dụ logic thêm
+
+        return {
+          warehouse_name: warehouse.name,
+          quantity: currentStock, // Cột Tồn kho
+          on_order: onOrder, // Cột KH đặt
+          forecast_days: forecastDays, // Cột Dự kiến hết hàng
+          status: status, // Cột Trạng thái
+        };
+      }),
+    );
+
+    return result;
   }
 }

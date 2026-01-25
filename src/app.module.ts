@@ -19,6 +19,11 @@ import { ReportsModule } from './modules/reports/reports.module';
 import { CategoriesModule } from './modules/categories/categories.module';
 import { ImportsModule } from './modules/imports/imports.module';
 import { InventoryModule } from './modules/inventory/inventory.module';
+import { ScheduleModule } from '@nestjs/schedule';
+import { TasksModule } from './tasks/tasks.module';
+import { PurchaseOrdersModule } from './modules/purchase-orders/purchase-orders.module';
+import { UsersModule } from './modules/users/users.module';
+import { StockTransfersModule } from './modules/stock-transfers/stock-transfers.module';
 // Sau này bạn sẽ import thêm AuthModule, ProductsModule vào đây
 
 @Module({
@@ -42,6 +47,11 @@ import { InventoryModule } from './modules/inventory/inventory.module';
     ReturnsModule,
     ReportsModule,
     InventoryModule,
+    ScheduleModule.forRoot(),
+    TasksModule,
+    PurchaseOrdersModule,
+    UsersModule,
+    StockTransfersModule,
   ],
   controllers: [AppController, UploadController],
   providers: [AppService, SupabaseService],

@@ -514,31 +514,27 @@ model orders {
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model partners {
-  id                BigInt         @id @default(autoincrement())
-  code              String         @unique
+  id                BigInt            @id @default(autoincrement())
+  code              String            @unique
   name              String
   phone             String?
   email             String?
   address           String?
-  type              String?        @default("customer")
+  type              String?           @default("customer")
   group_name        String?
-  assigned_staff_id String?        @db.Uuid
-  status            String?        @default("active")
-  current_debt      Decimal?       @default(0) @db.Decimal
-  total_revenue     Decimal?       @default(0) @db.Decimal
-  debt_limit        Decimal?       @default(10000000) @db.Decimal
+  assigned_staff_id String?           @db.Uuid
+  status            String?           @default("active")
+  current_debt      Decimal?          @default(0) @db.Decimal
+  total_revenue     Decimal?          @default(0) @db.Decimal
+  debt_limit        Decimal?          @default(10000000) @db.Decimal
   notes             String?
-  created_at        DateTime       @default(dbgenerated("timezone('utc'::text, now())")) @db.Timestamptz(6)
-  
+  created_at        DateTime          @default(dbgenerated("timezone('utc'::text, now())")) @db.Timestamptz(6)
   orders            orders[]
-  profiles          profiles?      @relation(fields: [assigned_staff_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  profiles          profiles?         @relation(fields: [assigned_staff_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  supplied_products products[]        @relation("ProductSupplier")
+  purchase_orders   purchase_orders[]
   returns           returns[]
   transactions      transactions[]
-
-  // --- THÊM DÒNG NÀY ---
-  // Quan hệ 1-N: Một Partner (Nhà cung cấp) có thể cung cấp nhiều sản phẩm
-  supplied_products products[]     @relation("ProductSupplier")
-  // ---------------------
 
   @@schema("public")
 }
@@ -558,47 +554,53 @@ model product_compatibility {
 
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model products {
-  id                    BigInt                  @id @default(autoincrement())
-  sku                   String                  @unique
-  name                  String
-  oem_code              String?
-  brand                 String?
-  unit                  String?                 @default("Cái")
-  cost_price            Decimal?                @default(0) @db.Decimal
-  last_import_price     Decimal?                @default(0) @db.Decimal
-  retail_price          Decimal?                @default(0) @db.Decimal
-  min_stock_alert       Int?                    @default(5)
-  image_url             String?
-  category_id           BigInt?
-  created_at            DateTime                @default(dbgenerated("timezone('utc'::text, now())")) @db.Timestamptz(6)
-  
-  // --- THÊM 2 DÒNG NÀY ---
-  supplier_id           BigInt?                 
-  supplier              partners?               @relation("ProductSupplier", fields: [supplier_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  // -----------------------
+  id                      BigInt                  @id @default(autoincrement())
+  sku                     String                  @unique
+  name                    String
+  oem_code                String?
+  brand                   String?
+  unit                    String?                 @default("Cái")
+  cost_price              Decimal?                @default(0) @db.Decimal
+  last_import_price       Decimal?                @default(0) @db.Decimal
+  retail_price            Decimal?                @default(0) @db.Decimal
+  min_stock_alert         Int?                    @default(5)
+  image_url               String?
+  category_id             BigInt?
+  created_at              DateTime                @default(dbgenerated("timezone('utc'::text, now())")) @db.Timestamptz(6)
+  supplier_id             BigInt?
+  average_daily_sales     Decimal?                @default(0) @db.Decimal
+  estimated_stockout_days Decimal?                @default(9999) @db.Decimal
+  inventory               inventory[]
+  inventory_logs          inventory_logs[]
+  order_items             order_items[]
+  product_compatibility   product_compatibility[]
+  categories              categories?             @relation(fields: [category_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  supplier                partners?               @relation("ProductSupplier", fields: [supplier_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  purchase_order_items    purchase_order_items[]
+  return_items            return_items[]
+  stock_transfer_items    stock_transfer_items[]
 
-  inventory             inventory[]
-  order_items           order_items[]
-  product_compatibility product_compatibility[]
-  categories            categories?             @relation(fields: [category_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  return_items          return_items[]
-
+  @@index([average_daily_sales], map: "idx_products_avg_sales")
+  @@index([estimated_stockout_days], map: "idx_products_stockout_days")
+  @@index([supplier_id], map: "idx_products_supplier_id")
   @@schema("public")
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model profiles {
-  id           String         @id @db.Uuid
-  full_name    String?
-  role         String?        @default("sale")
-  phone_number String?
-  avatar_url   String?
-  created_at   DateTime       @default(dbgenerated("timezone('utc'::text, now())")) @db.Timestamptz(6)
-  orders       orders[]
-  partners     partners[]
-  users        users          @relation(fields: [id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  transactions transactions[]
+  id              String            @id @db.Uuid
+  full_name       String?
+  role            String?           @default("sale")
+  phone_number    String?
+  avatar_url      String?
+  created_at      DateTime          @default(dbgenerated("timezone('utc'::text, now())")) @db.Timestamptz(6)
+  orders          orders[]
+  partners        partners[]
+  users           users             @relation(fields: [id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  purchase_orders purchase_orders[]
+  stock_transfers stock_transfers[]
+  transactions    transactions[]
 
   @@schema("public")
 }
@@ -687,13 +689,104 @@ model transactions {
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model warehouses {
-  id         BigInt      @id @default(autoincrement())
-  name       String
-  type       String?
-  address    String?
-  created_at DateTime    @default(dbgenerated("timezone('utc'::text, now())")) @db.Timestamptz(6)
-  inventory  inventory[]
-  orders     orders[]
+  id                                                            BigInt            @id @default(autoincrement())
+  name                                                          String
+  type                                                          String?
+  address                                                       String?
+  created_at                                                    DateTime          @default(dbgenerated("timezone('utc'::text, now())")) @db.Timestamptz(6)
+  inventory                                                     inventory[]
+  inventory_logs                                                inventory_logs[]
+  orders                                                        orders[]
+  purchase_orders                                               purchase_orders[]
+  stock_transfers_stock_transfers_from_warehouse_idTowarehouses stock_transfers[] @relation("stock_transfers_from_warehouse_idTowarehouses")
+  stock_transfers_stock_transfers_to_warehouse_idTowarehouses   stock_transfers[] @relation("stock_transfers_to_warehouse_idTowarehouses")
+
+  @@schema("public")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model purchase_order_items {
+  id                BigInt           @id @default(autoincrement())
+  purchase_order_id BigInt?
+  product_id        BigInt?
+  quantity          Int?             @default(1)
+  import_price      Decimal?         @default(0) @db.Decimal
+  created_at        DateTime         @default(dbgenerated("timezone('utc'::text, now())")) @db.Timestamptz(6)
+  products          products?        @relation(fields: [product_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  purchase_orders   purchase_orders? @relation(fields: [purchase_order_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@schema("public")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model purchase_orders {
+  id                   BigInt                 @id @default(autoincrement())
+  code                 String                 @unique
+  supplier_id          BigInt?
+  warehouse_id         BigInt?
+  staff_id             String?                @db.Uuid
+  total_amount         Decimal?               @default(0) @db.Decimal
+  discount             Decimal?               @default(0) @db.Decimal
+  final_amount         Decimal?               @default(0) @db.Decimal
+  paid_amount          Decimal?               @default(0) @db.Decimal
+  status               String?                @default("completed")
+  note                 String?
+  import_date          DateTime               @default(dbgenerated("timezone('utc'::text, now())")) @db.Timestamptz(6)
+  purchase_order_items purchase_order_items[]
+  profiles             profiles?              @relation(fields: [staff_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  partners             partners?              @relation(fields: [supplier_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  warehouses           warehouses?            @relation(fields: [warehouse_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@schema("public")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model stock_transfer_items {
+  id              BigInt           @id @default(autoincrement())
+  transfer_id     BigInt?
+  product_id      BigInt?
+  quantity        Int?             @default(1)
+  created_at      DateTime         @default(dbgenerated("timezone('utc'::text, now())")) @db.Timestamptz(6)
+  products        products?        @relation(fields: [product_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  stock_transfers stock_transfers? @relation(fields: [transfer_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@schema("public")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model stock_transfers {
+  id                                                       BigInt                 @id @default(autoincrement())
+  code                                                     String                 @unique
+  from_warehouse_id                                        BigInt?
+  to_warehouse_id                                          BigInt?
+  staff_id                                                 String?                @db.Uuid
+  status                                                   String?                @default("pending")
+  note                                                     String?
+  transfer_date                                            DateTime               @default(dbgenerated("timezone('utc'::text, now())")) @db.Timestamptz(6)
+  stock_transfer_items                                     stock_transfer_items[]
+  warehouses_stock_transfers_from_warehouse_idTowarehouses warehouses?            @relation("stock_transfers_from_warehouse_idTowarehouses", fields: [from_warehouse_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  profiles                                                 profiles?              @relation(fields: [staff_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  warehouses_stock_transfers_to_warehouse_idTowarehouses   warehouses?            @relation("stock_transfers_to_warehouse_idTowarehouses", fields: [to_warehouse_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@schema("public")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model inventory_logs {
+  id             BigInt      @id @default(autoincrement())
+  warehouse_id   BigInt?
+  product_id     BigInt?
+  change_amount  Int
+  balance_after  Int
+  type           String?
+  reference_code String?
+  note           String?
+  created_at     DateTime    @default(dbgenerated("timezone('utc'::text, now())")) @db.Timestamptz(6)
+  products       products?   @relation(fields: [product_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  warehouses     warehouses? @relation(fields: [warehouse_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@schema("public")
 }

@@ -36,6 +36,7 @@ import {
 } from '@nestjs/swagger';
 import { SupabaseGuard } from 'src/auth/supabase.guard';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { FilterSupplierDto } from './dto/filter-supplier.dto';
 
 // Giả định bạn có AuthGuard và RolesGuard
 // import { JwtAuthGuard } from 'src/common/guards/jwt-auth.guard';
@@ -75,6 +76,29 @@ export class PartnersController {
     const mockUser: UserPayload = req.user;
 
     return this.partnersService.findAll(filter, mockUser);
+  }
+
+  @Get('groups')
+  @ApiOperation({
+    summary: 'Lấy danh sách nhóm nhà cung cấp (distinct group_name)',
+  })
+  getGroups() {
+    return this.partnersService.getPartnerGroups();
+  }
+
+  @Get('supplier')
+  @ApiBearerAuth() // <--- Hiện ổ khóa trên Swagger
+  @UseGuards(SupabaseGuard) // <--- Kích hoạt bảo vệ
+  @ApiOperation({
+    summary: 'Lấy danh sách nhà cung cấp (Có phân trang & phân quyền)',
+  })
+  findAllSupplier(
+    @Query() filter: FilterSupplierDto,
+    // @CurrentUser() user: UserPayload, // Lấy user từ token
+  ) {
+    // MOCK USER để test (Xóa khi tích hợp Auth thật)
+
+    return this.partnersService.findAllSupplier(filter);
   }
 
   // -------------------------------------------------------
@@ -188,6 +212,8 @@ export class PartnersController {
   }
 
   @Post('import')
+  @ApiBearerAuth() // <--- Hiện ổ khóa trên Swagger
+  @UseGuards(SupabaseGuard) // <--- Kích hoạt bảo vệ
   @ApiOperation({ summary: 'Import đối tác từ file Excel (.xlsx)' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -203,18 +229,7 @@ export class PartnersController {
   })
   @UseInterceptors(FileInterceptor('file'))
   importExcel(
-    @UploadedFile(
-      new ParseFilePipe({
-        validators: [
-          new MaxFileSizeValidator({ maxSize: 1024 * 1024 * 10 }), // Max 5MB
-          // Validate đúng đuôi file Excel
-          new FileTypeValidator({
-            fileType:
-              'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-          }),
-        ],
-      }),
-    )
+    @UploadedFile()
     file: Express.Multer.File,
     @Req() req: any,
   ) {
