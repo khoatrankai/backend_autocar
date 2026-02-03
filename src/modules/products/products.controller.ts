@@ -25,6 +25,7 @@ import { Roles } from 'src/auth/decorators/roles.decorator';
 import { UserRole } from 'src/auth/dto/auth.dto';
 import { SupabaseGuard } from 'src/auth/supabase.guard';
 import { DeleteManyDto } from './dto/delete-many.dto';
+import { PosSearchProductDto } from './dto/pos-search-product.dto';
 
 @ApiTags('Products')
 @Controller('products')
@@ -91,5 +92,10 @@ export class ProductsController {
   @ApiOperation({ summary: 'Xóa nhiều sản phẩm cùng lúc' })
   removeMultiple(@Body() dto: DeleteManyDto) {
     return this.service.removeMultiple(dto.ids);
+  }
+
+  @Get('pos-search')
+  async posSearch(@Query() query: PosSearchProductDto) {
+    return this.service.posSearch(query);
   }
 }

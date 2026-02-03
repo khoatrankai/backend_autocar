@@ -245,4 +245,57 @@ export class OrdersService {
 
     return result;
   }
+
+  async findOne(id: string) {
+    const order = await this.prisma.orders.findUnique({
+      where: { id: BigInt(id) },
+      include: {
+        // 1. Thông tin Khách hàng (Đối tác)
+        partners: {
+          select: {
+            name: true,
+            phone: true,
+            address: true,
+            code: true,
+          },
+        },
+        // 2. Thông tin Kho/Cửa hàng (Để in Header hóa đơn)
+        warehouses: {
+          select: {
+            name: true,
+            address: true,
+            // phone: true, // Nếu schema kho có sđt
+          },
+        },
+        // 3. Thông tin Nhân viên bán
+        profiles: {
+          select: {
+            full_name: true,
+          },
+        },
+        // 4. Danh sách hàng hóa
+        order_items: {
+          include: {
+            products: {
+              select: {
+                unit: true, // Lấy ĐVT từ bảng product gốc (vì order_items không lưu)
+                sku: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!order) {
+      throw new NotFoundException(`Không tìm thấy đơn hàng với ID: ${id}`);
+    }
+
+    // 5. Serialize BigInt và Format dữ liệu trả về cho Frontend dễ dùng
+    return JSON.parse(
+      JSON.stringify(order, (key, value) =>
+        typeof value === 'bigint' ? value.toString() : value,
+      ),
+    );
+  }
 }

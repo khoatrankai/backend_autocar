@@ -9,6 +9,7 @@ import {
 } from './dto/filter-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { Prisma } from '@prisma/client';
+import { PosSearchProductDto } from './dto/pos-search-product.dto';
 
 @Injectable()
 export class ProductsService {
@@ -700,5 +701,80 @@ export class ProductsService {
     );
 
     return result;
+  }
+
+  async posSearch(query: PosSearchProductDto) {
+    const { keyword, car_model } = query;
+
+    // Build the WHERE clause dynamically
+    const where: any = {};
+
+    // 1. Keyword Search (Name or SKU)
+    if (keyword) {
+      where.OR = [
+        { name: { contains: keyword, mode: 'insensitive' } },
+        { sku: { contains: keyword, mode: 'insensitive' } },
+      ];
+    }
+
+    // 2. Car Model Filter (using relation product_compatibility)
+    if (car_model) {
+      where.product_compatibility = {
+        some: {
+          car_model: { contains: car_model, mode: 'insensitive' },
+        },
+      };
+    }
+
+    // Execute Query
+    const products = await this.prisma.products.findMany({
+      where,
+      select: {
+        id: true,
+        name: true,
+        sku: true,
+        retail_price: true,
+        unit: true,
+        image_url: true,
+        // Include inventory details
+        inventory: {
+          select: {
+            quantity: true,
+            warehouses: {
+              select: {
+                name: true,
+              },
+            },
+          },
+        },
+      },
+      take: 20, // Limit results for performance (POS usually needs quick lists)
+    });
+
+    // Transform Data to match the requested Response Structure
+    return products.map((product) => {
+      // Calculate total inventory
+      const inventory_total = product.inventory.reduce(
+        (sum, item) => sum + (item.quantity || 0),
+        0,
+      );
+
+      // Map detailed inventory per warehouse
+      const inventory_details = product.inventory.map((inv) => ({
+        warehouse_name: inv.warehouses?.name || 'Unknown Warehouse',
+        quantity: inv.quantity || 0,
+      }));
+
+      return {
+        id: product.id.toString(), // Convert BigInt to String
+        name: product.name,
+        sku: product.sku,
+        retail_price: Number(product.retail_price), // Convert Decimal to Number
+        unit: product.unit,
+        image_url: product.image_url,
+        inventory_total,
+        inventory_details,
+      };
+    });
   }
 }

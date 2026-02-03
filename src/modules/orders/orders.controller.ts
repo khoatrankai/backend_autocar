@@ -58,9 +58,16 @@ export class OrdersController {
   // -------------------------------------------------------
   // 2. Lấy danh sách đơn hàng
   // -------------------------------------------------------
+
   @Get()
   @ApiOperation({ summary: 'Lấy danh sách đơn hàng' })
   findAll() {
     return this.ordersService.findAll();
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: 'Lấy đơn hàng' })
+  findOne(@Param('id') id: string) {
+    return this.ordersService.findOne(id);
   }
 }
